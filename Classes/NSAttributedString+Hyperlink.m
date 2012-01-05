@@ -3,7 +3,7 @@
 //  gfxCardStatus
 //
 //  Created by Cody Krieger on 12/9/10.
-//  Copyright 2010 __MyCompanyName__. All rights reserved.
+//  Copyright 2010 Cody Krieger. All rights reserved.
 //
 
 #import "NSAttributedString+Hyperlink.h"
@@ -12,7 +12,7 @@
 @implementation NSAttributedString (Hyperlink)
 
 +(id)hyperlinkFromString:(NSString*)inString withURL:(NSURL*)aURL {
-    NSMutableAttributedString* attrString = [[NSMutableAttributedString alloc] initWithString: inString];
+    NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithString: inString];
     NSRange range = NSMakeRange(0, [attrString length]);
     
     [attrString beginEditing];

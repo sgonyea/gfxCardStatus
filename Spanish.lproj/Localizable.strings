@@ -12,8 +12,8 @@
 "Preferences"			= "Ajustes...";
 "Card"					= "Tarjeta: %%";
 "SwitchGPUs"			= "Cambiar de GPU";
-"IntegratedOnly"		= "Solo Integrated®";
-"DiscreteOnly"			= "Solo Discrete®";
+"IntegratedOnly"		= "Solo Integrated";
+"DiscreteOnly"			= "Solo Discrete";
 "DynamicSwitching"		= "Cambiar Dinámicamente";
 "Dependencies"			= "Dependencias";
 "NoProcess"				= "Ninguna";
@@ -36,8 +36,12 @@
 "Dynamic"               = "Dynamic";
 "OnBattery"             = "On Battery:";
 "PluggedIn"             = "Plugged In:";
+"General"               = "General";
+"Switching"             = "Switching";
+"SmartMenuBarIcons"     = "Use smart menu bar icons";
 
 /* About box */
 "AboutTitle"			= "Acerca de gfxCardStatus";
 "AboutWebsite"			= "Sitio Web";
 "Close"					= "¡Bien!";
+

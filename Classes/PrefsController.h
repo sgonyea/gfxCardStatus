@@ -9,33 +9,13 @@
 #import <Cocoa/Cocoa.h>
 
 
-@interface PrefsController : NSWindowController <NSWindowDelegate> {
+@interface PrefsController : NSObject <NSWindowDelegate> {
     NSString *prefsPath;
     NSMutableDictionary *prefs;
     
-    // general preferences
-    IBOutlet NSButton *prefChkUpdate; // check for updates on startup
-    IBOutlet NSButton *prefChkGrowl; // use growl to send notifications
-    IBOutlet NSButton *prefChkStartup; // start at login
-    IBOutlet NSButton *prefChkLog; // log diagnostic messages to console
-    
-    // switching preferences
-    IBOutlet NSButton *prefChkRestoreState; // restore last used mode on startup
-    IBOutlet NSButton *prefChkPowerSourceBasedSwitching; // use power source-based switching
-    IBOutlet NSSegmentedControl *prefSegOnBattery; // pref for gpu on battery
-    IBOutlet NSSegmentedControl *prefSegOnAc; // pref for gpu on ac
-    
-    // labels
-    IBOutlet NSTextField *onBatteryTextField;
-    IBOutlet NSTextField *pluggedInTextField;
-    
     NSNumber *yesNumber;
     NSNumber *noNumber;
-    
-    BOOL usingLegacy;
 }
-
-@property (nonatomic) BOOL usingLegacy;
 
 - (void)setUpPreferences;
 - (void)setDefaults;
@@ -47,9 +27,10 @@
 - (BOOL)shouldCheckForUpdatesOnStartup;
 - (BOOL)shouldGrowl;
 - (BOOL)shouldStartAtLogin;
-- (BOOL)shouldLogToConsole;
 - (BOOL)shouldRestoreStateOnStartup;
 - (BOOL)shouldUsePowerSourceBasedSwitching;
+- (BOOL)shouldUseImageIcons;
+- (BOOL)shouldUseSmartMenuBarIcons;
 - (int)shouldRestoreToMode;
 - (int)modeForPowerSource:(NSString *)powerSource;
 
@@ -58,11 +39,7 @@
 - (void)setBool:(BOOL)value forKey:(NSString *)key;
 - (BOOL)boolForKey:(NSString *)key;
 
-- (void)setControlsToPreferences;
 - (void)savePreferences;
-- (void)openPreferences;
-
-- (IBAction)preferenceChanged:(id)sender;
 
 + (PrefsController *)sharedInstance;
 

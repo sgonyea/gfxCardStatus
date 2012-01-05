@@ -36,6 +36,9 @@
 "Dynamic"               = "自动切换";
 "OnBattery"        = "使用电池时:";
 "PluggedIn"        = "电源适配器:";
+"General"               = "General";
+"Switching"             = "Switching";
+"SmartMenuBarIcons"     = "Use smart menu bar icons";
 
 /* About box */
 "AboutTitle"       = "关于 gfxCardStatus";
@@ -43,7 +46,7 @@
 
 /* Growl */
 "GrowlGPUChanged"       = "GPU changed";
-"GrowlSwitch"           = "now in use.";
+"GrowlSwitch"           = "'%1$@' now in use.";
 
 /***** NOT YET LOCALIZED ******/
 
@@ -63,3 +66,4 @@
 
 /* Not yet localized - About window */
 "About gfxCardStatus"						 = "关于 gfxCardStatus";
+

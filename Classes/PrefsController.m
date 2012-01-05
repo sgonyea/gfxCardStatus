@@ -7,34 +7,35 @@
 //
 
 #import "PrefsController.h"
-#import "systemProfiler.h"
+#import "SessionMagic.h"
 
 static PrefsController *sharedInstance = nil;
 
-@implementation PrefsController
+@interface PrefsController (Private)
 
-@synthesize usingLegacy;
+- (void)copyLoginItems:(LSSharedFileListRef *)loginItems andCurrentLoginItem:(LSSharedFileListItemRef *)currentItem;
+
+@end
+
+@implementation PrefsController
 
 #pragma mark -
 #pragma mark class instance methods
 
 - (id)init {
-    if ((self = [super initWithWindowNibName:@"PrefsWindow"])) {
-        Log(@"Initializing PrefsController");
+    if ((self = [super init])) {
+        GTMLoggerDebug(@"Initializing PrefsController");
         [self setUpPreferences];
     }
     return self;
 }
 
 - (void)setUpPreferences {
-    Log(@"Loading preferences and defaults");
+    GTMLoggerDebug(@"Loading preferences and defaults");
     
     // set yes/no numbers
     yesNumber = [NSNumber numberWithBool:YES];
     noNumber = [NSNumber numberWithBool:NO];
-    
-    NSDictionary *profile = getGraphicsProfile();
-    usingLegacy = [(NSNumber *)[profile objectForKey:@"legacy"] boolValue];
     
     // load preferences in from file
     prefs = [[NSMutableDictionary alloc] initWithContentsOfFile:[self getPrefsPath]];
@@ -52,42 +53,11 @@ static PrefsController *sharedInstance = nil;
     // ensure that application will be loaded at startup
     if ([self shouldStartAtLogin])
         [self loadAtStartup:YES];
-}
-
-- (void)awakeFromNib {
-    // localization
-    NSArray* localizedButtons = [[NSArray alloc] initWithObjects:prefChkGrowl, prefChkLog, prefChkPowerSourceBasedSwitching, 
-                          prefChkRestoreState, prefChkStartup, prefChkUpdate, nil];
-    for (NSButton *loc in localizedButtons) {
-        [loc setTitle:Str([loc title])];
-    }
-    [localizedButtons release];
     
-    NSArray *localizedLabels = [[NSArray alloc] initWithObjects:onBatteryTextField, pluggedInTextField, nil];
-    for (NSTextField *field in localizedLabels) {
-        [field setStringValue:Str([field stringValue])];
-    }
-    [localizedLabels release];
-    
-    if (usingLegacy) {
-        [prefSegOnBattery setSegmentCount:2];
-        [prefSegOnAc setSegmentCount:2];
-    } else {
-        [prefSegOnBattery setLabel:Str(@"Dynamic") forSegment:2];
-        [prefSegOnAc setLabel:Str(@"Dynamic") forSegment:2];
-    }
-    
-    [prefSegOnBattery setLabel:Str(@"Integrated") forSegment:0];
-    [prefSegOnBattery setLabel:Str(@"Discrete") forSegment:1];
-    [prefSegOnAc setLabel:Str(@"Integrated") forSegment:0];
-    [prefSegOnAc setLabel:Str(@"Discrete") forSegment:1];
-    
-    // set controls according to values set in preferences
-    [self setControlsToPreferences];
-    
-    // preferences window
-    [[self window] setLevel:NSModalPanelWindowLevel];
-    [[self window] setDelegate:self];
+    if ([[NSBundle mainBundle] pathForResource:@"integrated" ofType:@"png"])
+        [prefs setObject:yesNumber forKey:@"shouldUseImageIcons"];
+    else
+        [prefs setObject:noNumber forKey:@"shouldUseImageIcons"];
 }
 
 - (NSString *)getPrefsPath {
@@ -95,17 +65,17 @@ static PrefsController *sharedInstance = nil;
 }
 
 - (void)setDefaults {
-    Log(@"Setting initial defaults...");
+    GTMLoggerDebug(@"Setting initial defaults...");
     
     [prefs setObject:yesNumber forKey:@"shouldCheckForUpdatesOnStartup"];
     [prefs setObject:yesNumber forKey:@"shouldGrowl"];
     [prefs setObject:yesNumber forKey:@"shouldStartAtLogin"];
-    [prefs setObject:yesNumber forKey:@"shouldLogToConsole"];
     [prefs setObject:yesNumber forKey:@"shouldRestoreStateOnStartup"];
     [prefs setObject:noNumber forKey:@"shouldUsePowerSourceBasedSwitching"];
+    [prefs setObject:noNumber forKey:@"shouldUseSmartMenuBarIcons"];
     
     [prefs setObject:[NSNumber numberWithInt:0] forKey:kGPUSettingBattery]; // defaults to integrated
-    if (usingLegacy)
+    if ([[SessionMagic sharedInstance] usingLegacy])
         [prefs setObject:[NSNumber numberWithInt:1] forKey:kGPUSettingACAdaptor]; // defaults to discrete for legacy machines
     else
         [prefs setObject:[NSNumber numberWithInt:2] forKey:kGPUSettingACAdaptor]; // defaults to dynamic for new machines
@@ -116,62 +86,18 @@ static PrefsController *sharedInstance = nil;
     [self savePreferences];
 }
 
-- (void)setControlsToPreferences {
-    Log(@"Setting controls to mirror saved preferences");
-    
-    [prefChkUpdate setState:[self shouldCheckForUpdatesOnStartup]];
-    [prefChkGrowl setState:[self shouldGrowl]];
-    [prefChkStartup setState:[self shouldStartAtLogin]];
-    [prefChkLog setState:[self shouldLogToConsole]];
-    
-    [prefChkRestoreState setState:[self shouldRestoreStateOnStartup]];
-    [prefChkPowerSourceBasedSwitching setState:[self shouldUsePowerSourceBasedSwitching]];
-    [prefChkRestoreState setEnabled:![self shouldUsePowerSourceBasedSwitching]];
-    
-    [prefSegOnBattery setSelectedSegment:[self modeForPowerSource:kGPUSettingBattery]];
-    [prefSegOnAc setSelectedSegment:[self modeForPowerSource:kGPUSettingACAdaptor]];
-}
-
 - (void)savePreferences {
-    Log(@"Writing preferences to disk");
+    GTMLoggerDebug(@"Writing preferences to disk");
     
-    if ([prefs writeToFile:[self getPrefsPath] atomically:YES])
-        Log(@"Successfully wrote preferences to disk.");
-    else
-        Log(@"Failed to write preferences to disk. Permissions problem in ~/Library/Preferences?");
-}
-
-- (void)openPreferences {
-    [[self window] makeKeyAndOrderFront:nil];
-    [[self window] orderFrontRegardless];
-    [[self window] center];
+    if ([prefs writeToFile:[self getPrefsPath] atomically:YES]) {
+        GTMLoggerDebug(@"Successfully wrote preferences to disk.");
+    } else {
+        GTMLoggerDebug(@"Failed to write preferences to disk. Permissions problem in ~/Library/Preferences?");
+    }
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
     [self savePreferences];
-}
-
-- (IBAction)preferenceChanged:(id)sender {
-    if (sender == prefChkUpdate) {
-        [prefs setObject:([prefChkUpdate state] ? yesNumber : noNumber) forKey:@"shouldCheckForUpdatesOnStartup"];
-    } else if (sender == prefChkGrowl) {
-        [prefs setObject:([prefChkGrowl state] ? yesNumber : noNumber) forKey:@"shouldGrowl"];
-    } else if (sender == prefChkStartup) {
-        [prefs setObject:([prefChkStartup state] ? yesNumber : noNumber) forKey:@"shouldStartAtLogin"];
-        [self loadAtStartup:([prefChkStartup state] ? YES : NO)];
-    } else if (sender == prefChkLog) {
-        [prefs setObject:([prefChkLog state] ? yesNumber : noNumber) forKey:@"shouldLogToConsole"];
-        canLog = ([prefChkLog state] ? YES : NO);
-    } else if (sender == prefChkRestoreState) {
-        [prefs setObject:([prefChkRestoreState state] ? yesNumber : noNumber) forKey:@"shouldRestoreStateOnStartup"];
-    } else if (sender == prefChkPowerSourceBasedSwitching) {
-        [prefs setObject:([prefChkPowerSourceBasedSwitching state] ? yesNumber : noNumber) forKey:@"shouldUsePowerSourceBasedSwitching"];
-        [prefChkRestoreState setEnabled:![self shouldUsePowerSourceBasedSwitching]];
-    } else if (sender == prefSegOnBattery) {
-        [prefs setObject:[NSNumber numberWithInt:[prefSegOnBattery selectedSegment]] forKey:kGPUSettingBattery];
-    } else if (sender == prefSegOnAc) {
-        [prefs setObject:[NSNumber numberWithInt:[prefSegOnAc selectedSegment]] forKey:kGPUSettingACAdaptor];
-    }
 }
 
 - (void)setBool:(BOOL)value forKey:(NSString *)key {
@@ -195,16 +121,20 @@ static PrefsController *sharedInstance = nil;
     return [(NSNumber *)[prefs objectForKey:@"shouldStartAtLogin"] boolValue];
 }
 
-- (BOOL)shouldLogToConsole {
-    return [(NSNumber *)[prefs objectForKey:@"shouldLogToConsole"] boolValue];
-}
-
 - (BOOL)shouldRestoreStateOnStartup {
     return [(NSNumber *)[prefs objectForKey:@"shouldRestoreStateOnStartup"] boolValue];
 }
 
 - (BOOL)shouldUsePowerSourceBasedSwitching {
     return [(NSNumber *)[prefs objectForKey:@"shouldUsePowerSourceBasedSwitching"] boolValue];
+}
+
+- (BOOL)shouldUseImageIcons {
+    return [(NSNumber *)[prefs objectForKey:@"shouldUseImageIcons"] boolValue];
+}
+
+- (BOOL)shouldUseSmartMenuBarIcons {
+    return [(NSNumber *)[prefs objectForKey:@"shouldUseSmartMenuBarIcons"] boolValue];
 }
 
 - (int)shouldRestoreToMode {
@@ -220,64 +150,74 @@ static PrefsController *sharedInstance = nil;
     [self savePreferences];
 }
 
-- (BOOL)existsInStartupItems {
-    BOOL exists = NO;
-    LSSharedFileListRef loginItems = LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL);
-    if (loginItems) {
+- (void)copyLoginItems:(LSSharedFileListRef *)loginItems andCurrentLoginItem:(LSSharedFileListItemRef *)currentItem {
+    *loginItems = LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL);
+    
+    if (*loginItems) {
         UInt32 seedValue;
-        NSArray *loginItemsArray = (NSArray *)LSSharedFileListCopySnapshot(loginItems, &seedValue);
+        NSArray *loginItemsArray = (NSArray *)LSSharedFileListCopySnapshot(*loginItems, &seedValue);
+        
         for (id item in loginItemsArray) {
             LSSharedFileListItemRef itemRef = (LSSharedFileListItemRef)item;
             CFURLRef URL = NULL;
+            
             if (LSSharedFileListItemResolve(itemRef, 0, &URL, NULL) == noErr) {
                 if ([[(NSURL *)URL path] hasSuffix:@"gfxCardStatus.app"]) {
-                    exists = YES;
+                    GTMLoggerDebug(@"Exists in startup items.");
+                    
+                    *currentItem = (LSSharedFileListItemRef)item;
+                    CFRetain(*currentItem);
+                    
                     CFRelease(URL);
+                    
                     break;
                 }
+                
+                CFRelease(URL);
             }
         }
         
         [loginItemsArray release];
-        CFRelease(loginItems);
     }
+}
+
+- (BOOL)existsInStartupItems {
+    BOOL exists;
+    LSSharedFileListRef loginItems = NULL;
+    LSSharedFileListItemRef currentItem = NULL;
+    
+    [self copyLoginItems:&loginItems andCurrentLoginItem:&currentItem];
+    
+    exists = (currentItem != NULL);
+    
+    if (loginItems != NULL)
+        CFRelease(loginItems);
+    if (currentItem != NULL)
+        CFRelease(currentItem);
+    
     return exists;
 }
 
 - (void)loadAtStartup:(BOOL)value {
     NSURL *thePath = [[NSBundle mainBundle] bundleURL];
-    LSSharedFileListRef loginItems = LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL);
+    LSSharedFileListRef loginItems = NULL;
+    LSSharedFileListItemRef currentItem = NULL;
+    
+    [self copyLoginItems:&loginItems andCurrentLoginItem:&currentItem];
+    
     if (loginItems) {
-        BOOL exists = NO;
-        
-        UInt32 seedValue;
-        NSArray *loginItemsArray = (NSArray *)LSSharedFileListCopySnapshot(loginItems, &seedValue);
-        LSSharedFileListItemRef removeItem;
-        for (id item in loginItemsArray) {
-            LSSharedFileListItemRef itemRef = (LSSharedFileListItemRef)item;
-            CFURLRef URL = NULL;
-            if (LSSharedFileListItemResolve(itemRef, 0, &URL, NULL) == noErr) {
-                if ([[(NSURL *)URL path] hasSuffix:@"gfxCardStatus.app"]) {
-                    exists = YES;
-                    Log(@"Already exists in startup items");
-                    CFRelease(URL);
-                    removeItem = (LSSharedFileListItemRef)item;
-                    break;
-                }
-            }
-        }
-        
-        if (value && !exists) {
-            Log(@"Adding to startup items.");
+        if (value && currentItem == NULL) {
+            GTMLoggerDebug(@"Adding to startup items.");
             LSSharedFileListItemRef item = LSSharedFileListInsertItemURL(loginItems, kLSSharedFileListItemBeforeFirst, NULL, NULL, (CFURLRef)thePath, NULL, NULL);
             if (item) CFRelease(item);
-        } else if (!value && exists) {
-            Log(@"Removing from startup items.");        
-            LSSharedFileListItemRemove(loginItems, removeItem);
+        } else if (!value && currentItem != NULL) {
+            GTMLoggerDebug(@"Removing from startup items.");        
+            LSSharedFileListItemRemove(loginItems, currentItem);
         }
         
-        [loginItemsArray release];
         CFRelease(loginItems);
+        if (currentItem)
+            CFRelease(currentItem);
     }
 }
 
@@ -314,7 +254,8 @@ static PrefsController *sharedInstance = nil;
     return NSUIntegerMax; // denotes an object that cannot be released
 }
 
-- (void)release {
+- (oneway void)release {
+    // do nothing
 }
 
 - (id)autorelease {

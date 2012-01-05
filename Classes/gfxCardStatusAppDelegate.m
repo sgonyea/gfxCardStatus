@@ -7,27 +7,11 @@
 //
 
 #import "gfxCardStatusAppDelegate.h"
-#import "systemProfiler.h"
-#import "switcher.h"
-#import "proc.h"
+#import "SystemInfo.h"
+#import "MuxMagic.h"
 #import "NSAttributedString+Hyperlink.h"
-
-#pragma mark Power Source & Switcher Helpers
-#pragma mark -
-
-BOOL canLog = NO;
-
-// helper to get preference key from PowerSource enum
-static inline NSString *keyForPowerSource(PowerSource powerSource) {
-    return ((powerSource == psBattery) ? kGPUSettingBattery : kGPUSettingACAdaptor);
-}
-
-// helper to return current mode
-switcherMode switcherGetMode() {
-    if (switcherUseDynamicSwitching()) return modeDynamicSwitching;
-    NSDictionary *profile = getGraphicsProfile();
-    return ([(NSNumber *)[profile objectForKey:@"usingIntegrated"] boolValue] ? modeForceIntegrated : modeForceDiscrete);
-}
+#import "GeneralPreferencesViewController.h"
+#import "AdvancedPreferencesViewController.h"
 
 @implementation gfxCardStatusAppDelegate
 
@@ -36,24 +20,25 @@ switcherMode switcherGetMode() {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     prefs = [PrefsController sharedInstance];
+    state = [SessionMagic sharedInstance];
+    [state setDelegate:self];
     
     // initialize driver and process listing
-    canLog = [prefs shouldLogToConsole];
-    if (!switcherOpen()) Log(@"Can't open driver");
-    if (!procInit()) Log(@"Can't obtain I/O Kit's master port");
+    if (![MuxMagic switcherOpen]) GTMLoggerDebug(@"Can't open driver");
+    if (![SystemInfo procInit]) GTMLoggerDebug(@"Can't obtain I/O Kit's master port");
     
     // localization
     NSString *version = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleVersion"];
     [versionItem setTitle:[Str(@"About") stringByReplacingOccurrencesOfString:@"%%" withString:version]];
-    NSArray* localized = [[NSArray alloc] initWithObjects:updateItem, preferencesItem, quitItem, switchGPUs, integratedOnly, 
+    NSArray *localized = [[NSArray alloc] initWithObjects:updateItem, preferencesItem, quitItem, switchGPUs, integratedOnly, 
                           discreteOnly, dynamicSwitching, dependentProcesses, processList, aboutWindow, aboutClose, nil];
     for (NSButton *loc in localized) {
         [loc setTitle:Str([loc title])];
     }
     [localized release];
     
-    // set up growl notifications
-    if ([prefs shouldGrowl]) [GrowlApplicationBridge setGrowlDelegate:self];
+    // set up growl notifications regardless of whether or not we're supposed to growl
+    [GrowlApplicationBridge setGrowlDelegate:self];
     
     // check for updates if user has them enabled
     if ([prefs shouldCheckForUpdatesOnStartup]) [updater checkForUpdatesInBackground];
@@ -83,54 +68,47 @@ switcherMode switcherGetMode() {
         [prefs setBool:YES forKey:@"hasSeenVersionTwoMessage"];
     }
     
-    // notifications
+    // notifications and kvo
     NSNotificationCenter *defaultNotifications = [NSNotificationCenter defaultCenter];
-    [defaultNotifications addObserver:self selector:@selector(handleNotification:)
-                                   name:NSApplicationDidChangeScreenParametersNotification object:nil];
     [defaultNotifications addObserver:self selector:@selector(handleWake:)
                                  name:NSWorkspaceDidWakeNotification object:nil];
     
+    [prefs addObserver:self forKeyPath:@"prefs.shouldUseSmartMenuBarIcons" options:NSKeyValueObservingOptionNew context:nil];
+    
     // identify current gpu and set up menus accordingly
-    NSDictionary *profile = getGraphicsProfile();
+    NSDictionary *profile = [SystemInfo getGraphicsProfile];
     if ([(NSNumber *)[profile objectForKey:@"unsupported"] boolValue]) {
-        usingIntegrated = NO;
+        [state setUsingIntegrated:NO];
         NSAlert *alert = [NSAlert alertWithMessageText:@"You are using a system that gfxCardStatus does not support. Please ensure that you are using a MacBook Pro with dual GPUs." 
                                          defaultButton:@"Oh, I see." alternateButton:nil otherButton:nil informativeTextWithFormat:@""];
         [alert runModal];
     } else {
-        usingIntegrated = [(NSNumber *)[profile objectForKey:@"usingIntegrated"] boolValue];
+        [state setUsingIntegrated:[(NSNumber *)[profile objectForKey:@"usingIntegrated"] boolValue]];
     }
     
-    integratedString = [(NSString *)[profile objectForKey:@"integratedString"] copy];
-    discreteString = [(NSString *)[profile objectForKey:@"discreteString"] copy];
+    [state setIntegratedString:(NSString *)[profile objectForKey:@"integratedString"]];
+    [state setDiscreteString:(NSString *)[profile objectForKey:@"discreteString"]];
     
-    Log(@"Fetched machine profile: %@", profile);
+    GTMLoggerDebug(@"Fetched machine profile: %@", profile);
     
-    [switchGPUs setHidden:![prefs usingLegacy]];
-    [integratedOnly setHidden:[prefs usingLegacy]];
-    [discreteOnly setHidden:[prefs usingLegacy]];
-    [dynamicSwitching setHidden:[prefs usingLegacy]];
-    if ([prefs usingLegacy]) {
-        // integratedString = @"NVIDIA® GeForce 9400M";
-        // discreteString = @"NVIDIA® GeForce 9600M GT";
-    } else {
-        BOOL dynamic = switcherUseDynamicSwitching();
-        [integratedOnly setState:(!dynamic && usingIntegrated) ? NSOnState : NSOffState];
-        [discreteOnly setState:(!dynamic && !usingIntegrated) ? NSOnState : NSOffState];
+    [switchGPUs setHidden:![state usingLegacy]];
+    [integratedOnly setHidden:[state usingLegacy]];
+    [discreteOnly setHidden:[state usingLegacy]];
+    [dynamicSwitching setHidden:[state usingLegacy]];
+    
+    if (![state usingLegacy]) {
+        BOOL dynamic = [MuxMagic isUsingDynamicSwitching];
+        [integratedOnly setState:(!dynamic && [state usingIntegrated]) ? NSOnState : NSOffState];
+        [discreteOnly setState:(!dynamic && ![state usingIntegrated]) ? NSOnState : NSOffState];
         [dynamicSwitching setState:dynamic ? NSOnState : NSOffState];
-        
-        // integratedString = @"Intel® HD Graphics";
-        // discreteString = @"NVIDIA® GeForce GT 330M";
     }
     
-    canPreventSwitch = YES;
-    
-    canGrowl = NO;
+    [state setCanGrowl:NO];
     [self updateMenu];
     
     // only resture last mode if preference is set, and we're NOT using power source-based switching
-    if ([prefs shouldRestoreStateOnStartup] && ![prefs shouldUsePowerSourceBasedSwitching] && ![prefs usingLegacy]) {
-        Log(@"Restoring last used mode (%i)...", [prefs shouldRestoreToMode]);
+    if ([prefs shouldRestoreStateOnStartup] && ![prefs shouldUsePowerSourceBasedSwitching] && ![state usingLegacy]) {
+        GTMLoggerInfo(@"Restoring last used mode (%i)...", [prefs shouldRestoreToMode]);
         id modeItem = nil;
         switch ([prefs shouldRestoreToMode]) {
             case 0:
@@ -146,7 +124,8 @@ switcherMode switcherGetMode() {
         
         [self setMode:modeItem];
     }
-    canGrowl = YES;
+    
+    [state setCanGrowl:YES];
     
     powerSourceMonitor = [PowerSourceMonitor monitorWithDelegate:self];
     lastPowerSource = -1; // uninitialized
@@ -159,13 +138,15 @@ switcherMode switcherGetMode() {
     return [NSDictionary dictionaryWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"Growl Registration Ticket" ofType:@"growlRegDict"]];
 }
 
-- (void)handleNotification:(NSNotification *)notification {
-    // Notification observer
-    // NOTE: If we open the menu while a slow app like Interface Builder is loading, we have the icon not changing
-    // TODO: Look into way AirPort menu item handles updating while open
-    
-    Log(@"The following notification has been triggered:\n%@", notification);
+- (void)gpuChangedTo:(GPUType)gpu from:(GPUType)from {
     [self updateMenu];
+    
+    if ([state canGrowl] && gpu != from) {
+        NSString *cardString = [state usingIntegrated] ? [state integratedString] : [state discreteString];
+        NSString *msg  = [NSString stringWithFormat:Str(@"GrowlSwitch"), cardString];
+        NSString *name = [state usingIntegrated] ? @"switchedToIntegrated" : @"switchedToDiscrete";
+        [GrowlApplicationBridge notifyWithTitle:Str(@"GrowlGPUChanged") description:msg notificationName:name iconData:nil priority:0 isSticky:NO clickContext:nil];
+    }
     
     // verify state
     [self performSelector:@selector(checkCardState) withObject:nil afterDelay:2.0];
@@ -179,6 +160,12 @@ switcherMode switcherGetMode() {
     [self powerSourceChanged:powerSourceMonitor.currentPowerSource];
 }
 
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if ([keyPath isEqualToString:@"prefs.shouldUseSmartMenuBarIcons"]) {
+        [self updateMenu];
+    }
+}
+
 #pragma mark Menu Actions
 #pragma mark -
 
@@ -189,23 +176,41 @@ switcherMode switcherGetMode() {
 
 - (void)menuWillOpen:(NSMenu *)menu {
     // white image when menu is open
-    // [statusItem setImage:[NSImage imageNamed:[[[statusItem image] name] stringByAppendingString:@"-white.png"]]];
+    if ([prefs shouldUseImageIcons]) {
+        [statusItem setImage:[NSImage imageNamed:[[[statusItem image] name] stringByAppendingString:@"-white.png"]]];
+    }
 }
 
 - (void)menuDidClose:(NSMenu *)menu {
     // black image when menu is closed
-    // [statusItem setImage:[NSImage imageNamed:[[[statusItem image] name] stringByReplacingOccurrencesOfString:@"-white" withString:@".png"]]];
+    if ([prefs shouldUseImageIcons]) {
+        [statusItem setImage:[NSImage imageNamed:[[[statusItem image] name] stringByReplacingOccurrencesOfString:@"-white" withString:@".png"]]];
+    }
 }
 
 - (IBAction)openPreferences:(id)sender {
-    [prefs openPreferences];
+    if (!pwc) {
+        pwc = [[PreferencesWindowController alloc] init];
+        
+        NSArray *modules = [NSArray arrayWithObjects:
+                            [[[GeneralPreferencesViewController alloc] init] autorelease], 
+                            [[[AdvancedPreferencesViewController alloc] init] autorelease],
+                            nil];
+        
+        [pwc setModules:modules];
+    }
+    
+    pwc.window.delegate = prefs;
+    
+    [pwc.window center];
+    [pwc.window makeKeyAndOrderFront:self];
+    [pwc.window setOrderedIndex:0];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (IBAction)openAbout:(id)sender {
-    // open window and force to the front
-    [aboutWindow makeKeyAndOrderFront:nil];
-    [aboutWindow orderFrontRegardless];
-    [aboutWindow center];
+    [[NSApplication sharedApplication] orderFrontStandardAboutPanel:nil];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (IBAction)closeAbout:(id)sender {
@@ -215,8 +220,8 @@ switcherMode switcherGetMode() {
 - (IBAction)setMode:(id)sender {
     // legacy cards
     if (sender == switchGPUs) {
-        Log(@"Switching GPUs...");
-        switcherSetMode(modeToggleGPU);
+        GTMLoggerInfo(@"Switching GPUs...");
+        [MuxMagic switcherSetMode:modeToggleGPU];
         return;
     }
     
@@ -225,16 +230,16 @@ switcherMode switcherGetMode() {
     
     BOOL retval = NO;
     if (sender == integratedOnly) {
-        Log(@"Setting Integrated only...");
-        retval = switcherSetMode(modeForceIntegrated);
+        GTMLoggerInfo(@"Setting Integrated only...");
+        retval = [MuxMagic switcherSetMode:modeForceIntegrated];
     }
     if (sender == discreteOnly) { 
-        Log(@"Setting NVIDIA only...");
-        retval = switcherSetMode(modeForceDiscrete);
+        GTMLoggerInfo(@"Setting NVIDIA only...");
+        retval = [MuxMagic switcherSetMode:modeForceDiscrete];
     }
     if (sender == dynamicSwitching) {
-        Log(@"Setting dynamic switching...");
-        retval = switcherSetMode(modeDynamicSwitching);
+        GTMLoggerInfo(@"Setting dynamic switching...");
+        retval = [MuxMagic switcherSetMode:modeDynamicSwitching];
     }
     
     // only change status in case of success
@@ -244,7 +249,7 @@ switcherMode switcherGetMode() {
         [dynamicSwitching setState:(sender == dynamicSwitching ? NSOnState : NSOffState)];
         
         // delayed double-check
-        [self performSelector:@selector(checkCardState) withObject:nil afterDelay:5.0];
+//        [self performSelector:@selector(checkCardState) withObject:nil afterDelay:5.0];
     }
 }
 
@@ -257,71 +262,63 @@ switcherMode switcherGetMode() {
 }
 
 - (void)updateMenu {
-    BOOL integrated = switcherUseIntegrated();
-    Log(@"Updating status...");
+    GTMLoggerDebug(@"Updating status...");
     
     // TODO - fix this, not working
     // prevent GPU from switching back after apps quit
-    //    if (!integrated && ![prefs usingLegacy] && [integratedOnly state] > 0 && canPreventSwitch) {
-    //        Log(@"Preventing switch to Discrete GPU. Setting canPreventSwitch to NO so that this doesn't get stuck in a loop, changing in 5 seconds...");
+    //    if (!integrated && ![state usingLegacy] && [integratedOnly state] > 0 && canPreventSwitch) {
+    //        DLog(@"Preventing switch to Discrete GPU. Setting canPreventSwitch to NO so that this doesn't get stuck in a loop, changing in 5 seconds...");
     //        canPreventSwitch = NO;
     //        [self setMode:integratedOnly];
     //        [NSTimer scheduledTimerWithTimeInterval:5 target:self selector:@selector(shouldPreventSwitch) userInfo:nil repeats:NO];
     //        return;
     //    }
     
-    
     // get updated GPU string
-    NSString* cardString = integrated ? integratedString : discreteString;
+    NSString *cardString = [state usingIntegrated] ? [state integratedString] : [state discreteString];
     
     // set menu bar icon
-    // [statusItem setImage:[NSImage imageNamed:integrated ? @"integrated-3.png" : @"discrete-3.png"]];
-    
-    // grab first character of GPU string for the menu bar icon
-    unichar firstLetter;
-    if ([prefs usingLegacy]) {
-        firstLetter = integrated ? 'i' : 'd';
+    if ([prefs shouldUseImageIcons]) {
+        [statusItem setImage:[NSImage imageNamed:[state usingIntegrated] ? @"integrated.png" : @"discrete.png"]];
     } else {
-        firstLetter = [cardString characterAtIndex:0];
-    }
-    
-    // format firstLetter into an NSString *
-    NSString *letter = [[NSString stringWithFormat:@"%C", firstLetter] lowercaseString];
-    int fontSize = ([letter isEqualToString:@"n"] || [letter isEqualToString:@"a"] ? 19 : 18);
-    
-    // set the correct font
-    NSFontManager *fontManager = [NSFontManager sharedFontManager];
-    NSFont *boldItalic = [fontManager fontWithFamily:@"Georgia"
-                                              traits:NSBoldFontMask|NSItalicFontMask
-                                              weight:0
-                                                size:fontSize];
-    
-    // create NSAttributedString with font
-    NSDictionary *attributes = [[[NSDictionary alloc] initWithObjectsAndKeys:
-                                boldItalic, NSFontAttributeName, 
-                                [NSNumber numberWithDouble:2.0], NSBaselineOffsetAttributeName, nil] autorelease];
-    NSAttributedString *title = [[[NSAttributedString alloc] 
-                                 initWithString:letter
-                                    attributes: attributes] autorelease];
-    
-    // set menu bar text "icon"
-    [statusItem setAttributedTitle:title];
-    
+        // grab first character of GPU string for the menu bar icon
+        unichar firstLetter;
+        
+        if ([state usingLegacy] || ![prefs shouldUseSmartMenuBarIcons]) {
+            firstLetter = [state usingIntegrated] ? 'i' : 'd';
+        } else {
+            firstLetter = [cardString characterAtIndex:0];
+        }
+        
+        // format firstLetter into an NSString *
+        NSString *letter = [[NSString stringWithFormat:@"%C", firstLetter] lowercaseString];
+        int fontSize = ([letter isEqualToString:@"n"] || [letter isEqualToString:@"a"] ? 19 : 18);
+        
+        // set the correct font
+        NSFontManager *fontManager = [NSFontManager sharedFontManager];
+        NSFont *boldItalic = [fontManager fontWithFamily:@"Georgia"
+                                                  traits:NSBoldFontMask|NSItalicFontMask
+                                                  weight:0
+                                                    size:fontSize];
+        
+        // create NSAttributedString with font
+        NSDictionary *attributes = [[[NSDictionary alloc] initWithObjectsAndKeys:
+                                     boldItalic, NSFontAttributeName, 
+                                     [NSNumber numberWithDouble:2.0], NSBaselineOffsetAttributeName, nil] autorelease];
+        NSAttributedString *title = [[[NSAttributedString alloc] 
+                                      initWithString:letter
+                                      attributes: attributes] autorelease];
+        
+        // set menu bar text "icon"
+        [statusItem setAttributedTitle:title];
+    }    
     
     [currentCard setTitle:[Str(@"Card") stringByReplacingOccurrencesOfString:@"%%" withString:cardString]];
-    [currentPowerSource setTitle:[Str(@"PowerSource") stringByReplacingOccurrencesOfString:@"%%" withString:(powerSourceMonitor.currentPowerSource == psBattery) ? Str(@"Battery") : Str(@"ACAdapter")]];
     
-    if (integrated) Log(@"%@ in use. Sweet deal! More battery life.", integratedString);
-    else Log(@"%@ in use. Bummer! Less battery life for you.", discreteString);
+    if ([state usingIntegrated]) GTMLoggerInfo(@"%@ in use. Sweet deal! More battery life.", [state integratedString]);
+    else GTMLoggerInfo(@"%@ in use. Bummer! Less battery life for you.", [state discreteString]);
     
-    if ([prefs shouldGrowl] && canGrowl && usingIntegrated != integrated) {
-        NSString *msg  = [NSString stringWithFormat:@"%@ %@", cardString, Str(@"GrowlSwitch")];
-        NSString *name = integrated ? @"switchedToIntegrated" : @"switchedToDiscrete";
-        [GrowlApplicationBridge notifyWithTitle:Str(@"GrowlGPUChanged") description:msg notificationName:name iconData:nil priority:0 isSticky:NO clickContext:nil];
-    }
-    
-    usingIntegrated = integrated;
-    if (!integrated) [self updateProcessList];
+    if (![state usingIntegrated]) [self updateProcessList];
 }
 
 - (void)updateProcessList {
@@ -330,49 +327,35 @@ switcherMode switcherGetMode() {
     }
     
     // if we're on Integrated (or using a 9400M/9600M GT model), no need to display/update the list
-    BOOL procList = !usingIntegrated && ![prefs usingLegacy];
+    BOOL procList = ![state usingIntegrated] && ![state usingLegacy];
     [processList setHidden:!procList];
     [processesSeparator setHidden:!procList];
     [dependentProcesses setHidden:!procList];
     if (!procList) return;
     
-    Log(@"Updating process list...");
+    GTMLoggerDebug(@"Updating process list...");
     
-    // find out if an external monitor is forcing the 330M on
-    BOOL usingExternalDisplay = NO;
-    CGDirectDisplayID displays[8];
-    CGDisplayCount displayCount = 0;
-    if (CGGetOnlineDisplayList(8, displays, &displayCount) == noErr) {
-        for (int i = 0; i < displayCount; i++) {
-            if ( ! CGDisplayIsBuiltin(displays[i])) {
-                NSMenuItem *externalDisplay = [[[NSMenuItem alloc] initWithTitle:@"External Display" action:nil keyEquivalent:@""] autorelease];
-                [externalDisplay setIndentationLevel:1];
-                [statusMenu insertItem:externalDisplay atIndex:([statusMenu indexOfItem:processList] + 1)];
-                usingExternalDisplay = YES;
-            }
-        }
+    NSArray *processes = [SystemInfo getTaskList];
+    
+    [processList setHidden:([processes count] > 0)];
+    
+    for (NSDictionary *dict in processes) {
+        NSString *taskName = [dict objectForKey:kTaskItemName];
+        NSString *pid = [dict objectForKey:kTaskItemPID];
+        NSString *title = [NSString stringWithString:taskName];
+        if (![pid isEqualToString:@""]) title = [title stringByAppendingFormat:@", PID: %@", pid];
+        
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        [item setIndentationLevel:1];
+        [statusMenu insertItem:item atIndex:([statusMenu indexOfItem:processList] + 1)];
+        [item release];
     }
-    
-    NSMutableDictionary* procs = [[NSMutableDictionary alloc] init];
-    if (!procGet(procs)) Log(@"Can't obtain I/O Kit's root service");
-    
-    [processList setHidden:([procs count] > 0 || usingExternalDisplay)];
-    if ([procs count]==0) Log(@"We're using the Discrete card, but no process requires it. An external monitor may be connected, or we may be in Discrete Only mode.");
-    
-    for (NSString* appName in [procs allValues]) {
-        NSMenuItem *appItem = [[NSMenuItem alloc] initWithTitle:appName action:nil keyEquivalent:@""];
-        [appItem setIndentationLevel:1];
-        [statusMenu insertItem:appItem atIndex:([statusMenu indexOfItem:processList] + 1)];
-        [appItem release];
-    }
-    
-    [procs release];
 }
 
 #pragma mark Helpers
 #pragma mark -
 
-- (NSMenuItem *)senderForMode:(switcherMode)mode {
+- (NSMenuItem *)senderForMode:(SwitcherMode)mode {
     // convert switcher mode to a menu item (consumed by setMode:)
     
     switch (mode) {
@@ -394,12 +377,12 @@ switcherMode switcherGetMode() {
     // it seems right after waking from sleep, locking to single GPU will fail (even if the return value is correct)
     // this is a temporary workaround to double-check the status
     
-    switcherMode currentMode = switcherGetMode(); // actual current mode
+    SwitcherMode currentMode = [SystemInfo switcherGetMode]; // actual current mode
     NSMenuItem *activeCard = [self senderForMode:currentMode]; // corresponding menu item
     
     // check if its consistent with menu state
-    if ([activeCard state] != NSOnState && ![prefs usingLegacy]) {
-        Log(@"Inconsistent menu state and active card, forcing retry");
+    if ([activeCard state] != NSOnState && ![state usingLegacy]) {
+        GTMLoggerDebug(@"Inconsistent menu state and active card, forcing retry");
         
         // set menu item to reflect actual status
         [integratedOnly setState:NSOffState];
@@ -423,23 +406,23 @@ switcherMode switcherGetMode() {
 
 - (void)powerSourceChanged:(PowerSource)powerSource {
     if (powerSource == lastPowerSource) {
-        //Log(@"Power source unchanged, false alarm (maybe a wake from sleep?)");
+        //DLog(@"Power source unchanged, false alarm (maybe a wake from sleep?)");
         return;
     }
     
-    Log(@"Power source changed: %d => %d (%@)", lastPowerSource, powerSource, (powerSource == psBattery ? @"Battery" : @"AC Adapter"));
+    GTMLoggerDebug(@"Power source changed: %d => %d (%@)", lastPowerSource, powerSource, (powerSource == psBattery ? @"Battery" : @"AC Adapter"));
     lastPowerSource = powerSource;
     
     if ([prefs shouldUsePowerSourceBasedSwitching]) {
-        switcherMode newMode = [prefs modeForPowerSource:keyForPowerSource(powerSource)];
+        SwitcherMode newMode = [prefs modeForPowerSource:[SystemInfo keyForPowerSource:powerSource]];
         
-        if (![prefs usingLegacy]) {
-            Log(@"Using a newer machine, setting appropriate mode based on power source...");
+        if (![state usingLegacy]) {
+            GTMLoggerDebug(@"Using a newer machine, setting appropriate mode based on power source...");
             [self setMode:[self senderForMode:newMode]];
         } else {
-            Log(@"Using a legacy machine, setting appropriate mode based on power source...");
-            Log(@"usingIntegrated=%i, newMode=%i", usingIntegrated, newMode);
-            if ((usingIntegrated && newMode == 1) || (!usingIntegrated && newMode == 0)) {
+            GTMLoggerDebug(@"Using a legacy machine, setting appropriate mode based on power source...");
+            GTMLoggerInfo(@"Power source-based switch: usingIntegrated=%i, newMode=%i", [state usingIntegrated], newMode);
+            if (([state usingIntegrated] && newMode == 1) || (![state usingIntegrated] && newMode == 0)) {
                 [self setMode:switchGPUs];
             }
         }
@@ -448,14 +431,11 @@ switcherMode switcherGetMode() {
     [self updateMenu];
 }
 
-//- (void)shouldPreventSwitch {
-//    Log(@"Can prevent switching again.");
-//    canPreventSwitch = YES;
-//}
-
 - (void)dealloc {
-    procFree(); // Free processes listing buffers
-    switcherClose(); // Close driver
+    [prefs removeObserver:self forKeyPath:@"prefs.shouldUseSmartMenuBarIcons"];
+    
+    [SystemInfo procFree]; // Free processes listing buffers
+    [MuxMagic switcherClose]; // Close driver
     
     [statusItem release];
     [super dealloc];

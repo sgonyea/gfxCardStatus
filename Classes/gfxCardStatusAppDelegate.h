@@ -12,12 +12,12 @@
 #import <Growl/Growl.h>
 
 #import "PrefsController.h"
+#import "PreferencesWindowController.h"
+#import "SessionMagic.h"
 #import "PowerSourceMonitor.h"
 
-extern BOOL canLog;
-#define Log(...) ({ if (canLog) NSLog(__VA_ARGS__); })
 
-@interface gfxCardStatusAppDelegate : NSObject <NSApplicationDelegate,GrowlApplicationBridgeDelegate,NSMenuDelegate,PowerSourceMonitorDelegate> {
+@interface gfxCardStatusAppDelegate : NSObject <NSApplicationDelegate,GrowlApplicationBridgeDelegate,NSMenuDelegate,PowerSourceMonitorDelegate,SessionMagicDelegate> {
     NSStatusItem *statusItem;
     
     IBOutlet SUUpdater *updater;
@@ -47,15 +47,10 @@ extern BOOL canLog;
     
     // preferences for all!
     PrefsController *prefs;
+    PreferencesWindowController *pwc;
     
-    // some basic status indicator bools
-    BOOL canGrowl;
-    BOOL usingIntegrated;
-    
-    BOOL canPreventSwitch;
-    
-    NSString *integratedString;
-    NSString *discreteString;
+    // state for all!!!
+    SessionMagic *state;
     
     // power source monitor
     PowerSourceMonitor *powerSourceMonitor;
@@ -72,7 +67,5 @@ extern BOOL canLog;
 - (IBAction)closeAbout:(id)sender;
 - (IBAction)openApplicationURL:(id)sender;
 - (IBAction)quit:(id)sender;
-
-//- (void)shouldPreventSwitch;
 
 @end

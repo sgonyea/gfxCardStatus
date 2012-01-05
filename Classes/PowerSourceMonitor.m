@@ -12,6 +12,9 @@
 #include <IOKit/ps/IOPSKeys.h>
 #include <IOKit/ps/IOPowerSources.h>
 
+void powerSourceChanged(void *context);
+void registerPowerSourceNotification(PowerSourceMonitor *powerSourceMonitor);
+
 static BOOL stringsAreEqual(CFStringRef a, CFStringRef b) {
     if (a == nil || b == nil) {
         return NO;
@@ -51,7 +54,7 @@ static PowerSource getCurrentPowerSource() {
                 status = psUnknown;
             }
             // Add charge code once thresholding code is implemented.
-        } 
+        }
     }
     
 cleanup:
@@ -62,7 +65,7 @@ cleanup:
 }
 
 
-void powerSourceChanged(void * context) {
+void powerSourceChanged(void *context) {
     PowerSourceMonitor *powerSourceMonitor = (PowerSourceMonitor *)context;
     
     [powerSourceMonitor powerSourceChanged:getCurrentPowerSource()];
@@ -73,11 +76,10 @@ void registerPowerSourceNotification(PowerSourceMonitor *powerSourceMonitor) {
     
     if (loopSource) {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), loopSource, kCFRunLoopDefaultMode);
+        CFRelease(loopSource);
     } else {
-        NSLog(@"Creating RunLoop failed!\n");
+        GTMLoggerDebug(@"Creating RunLoop failed!\n");
     }
-    
-    CFRelease(loopSource);
 }
 
 @implementation PowerSourceMonitor

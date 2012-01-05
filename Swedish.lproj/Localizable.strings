@@ -36,6 +36,9 @@
 "Dynamic"               = "Dynamic";
 "OnBattery"             = "Batteri:";
 "PluggedIn"             = "AC-adapter:";
+"General"               = "General";
+"Switching"             = "Switching";
+"SmartMenuBarIcons"     = "Use smart menu bar icons";
 
 /* About box */
 "AboutTitle"			= "Om gfxCardStatus";
@@ -43,4 +46,5 @@
 
 /* Growl */
 "GrowlGPUChanged"       = "GPU ändrad";
-"GrowlSwitch"           = "används nu.";
+"GrowlSwitch"           = "'%1$@' används nu.";
+
